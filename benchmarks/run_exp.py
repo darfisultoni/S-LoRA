@@ -38,12 +38,7 @@ def get_peak_mem(server):
 async def send_request(
     backend: str,
     server: str,
-    req_id: str,
-    model_dir: str,
-    adapter_dir: str,
-    prompt: str,
-    prompt_len: int,
-    output_len: int,
+    req,
     debug: bool,
 ) -> None:
     request_start_time = time.time()
@@ -56,48 +51,23 @@ async def send_request(
     else:
         url = server + "/generate_stream"
     
-    if backend in ["slora"]:
-        data = {
-            'model_dir': model_dir,
-            'lora_dir': adapter_dir,
-            'inputs': prompt,
-            'parameters': {
-                'do_sample': False,
-                'ignore_eos': True,
-                'max_new_tokens': output_len,
-                 # 'temperature': 0.1,
-            }
-        }
-    elif backend in ["lightllm"]:
-        data = {
-            'inputs': prompt,
-            'parameters': {
-                'do_sample': False,
-                'ignore_eos': True,
-                'max_new_tokens': output_len,
-                 # 'temperature': 0.1,
-            },
-        }
-    elif backend in ["vllm", "vllm-packed"]:
-        data = {
-            'prompt': prompt,
-            'max_tokens': output_len,
-            'ignore_eos': True,
-        }
 
     first_token_latency = None
     timeout = aiohttp.ClientTimeout(total=3 * 3600)
+
+    print(json.dumps(req))
+
     async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
         while True:
-            async with session.post(url, headers=headers, json=data) as response:
+            async with session.post(url, headers=headers, json=req) as response:
                 chunks = []
                 async for chunk, _ in response.content.iter_chunks():
                     if first_token_latency is None:
                         first_token_latency = time.time() - request_start_time
                     chunks.append(chunk)
             output = b"".join(chunks).decode("utf-8")
-            # output = json.loads(output)
-            # print(output)
+            #output = json.loads(output)
+            #print(output)
             
             if '\"finished\": -1' not in output:
                 break
@@ -110,10 +80,10 @@ async def send_request(
 
     request_end_time = time.time()
     request_latency = request_end_time - request_start_time
-    print(f"req_id {req_id} prompt_len {prompt_len} output_len {output_len} "
-          f"request_latency {request_latency:.2f} s, first_token_latency {first_token_latency:.2f} s")
-    REQUEST_LATENCY.append((prompt_len, output_len, request_latency, first_token_latency))
-    return (prompt_len, output_len, request_latency, first_token_latency)
+    #print(f"req_id {req_id} prompt_len {prompt_len} output_len {output_len} "
+    #      f"request_latency {request_latency:.2f} s, first_token_latency {first_token_latency:.2f} s")
+    REQUEST_LATENCY.append((3, 100, request_latency, first_token_latency))
+    return (3, 100, request_latency, first_token_latency)
 
 
 async def benchmark(
@@ -122,16 +92,42 @@ async def benchmark(
     input_requests: List[Tuple[str, str, str, int, int]],
     debug=False,
 ) -> None:
+    model_dir="huggyllama/llama-7b"
+    new = [{
+            'req_id': i,
+            'model_dir': model_dir,
+            'lora_dir': "tloen/alpaca-lora-7b-"+str(i),
+            'inputs': "explain bernoulli law",
+            'parameters': {
+                'do_sample': False,
+                'ignore_eos': True,
+                'max_new_tokens': 100,
+                 # 'temperature': 0.1,
+            }
+            }for i in range(0,50)] + [{
+            'req_id': i+50,
+            'model_dir': model_dir,
+            'lora_dir': "MBZUAI/bactrian-x-llama-7b-lora-"+str(i),
+            'inputs': "explain bernoulli law",
+            'parameters': {
+                'do_sample': False,
+                'ignore_eos': True,
+                'max_new_tokens': 100,
+                 # 'temperature': 0.1,
+            }
+            }for i in range(0,50)]
+
+    print(new)
+
     start = time.time()
     tasks: List[asyncio.Task] = []
-    for req in input_requests:
-        await asyncio.sleep(start + req.req_time - time.time())
+    for req in new:
+        #await asyncio.sleep(start + req.req_time - time.time())
         if debug:
-            print(f"{req.req_id} {req.req_time:.5f} wait {start + req.req_time - time.time():.5f} "
-                  f"{req.adapter_dir}")
-        task = asyncio.create_task(send_request(backend, server,
-                                                req.req_id, req.model_dir, req.adapter_dir, req.prompt,
-                                                req.prompt_len, req.output_len, debug))
+            print(req)
+            #print(f"{req.req_id} {req.req_time:.5f} wait {start + req.req_time - time.time():.5f} "
+            #      f"{req.adapter_dir}")
+        task = asyncio.create_task(send_request(backend, server, req, debug))
         tasks.append(task)
     latency = await asyncio.gather(*tasks)
     return latency
